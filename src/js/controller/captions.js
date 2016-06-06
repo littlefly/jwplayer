@@ -153,7 +153,7 @@ define([
 
             var tracks = item.tracks,
                 track, kind, isVTT, i;
-            var isHTML5 = _model.get('provider').name === 'html5';
+            var isFlash = _model.get('provider').name === 'flash';
 
             var canRenderNatively = utils.isChrome() || utils.isIOS() || utils.isSafari();
 
@@ -162,7 +162,7 @@ define([
                 isVTT = track.file && (/\.(?:web)?vtt(?:\?.*)?$/i.test(track.file));
 
                 //let the browser handle rendering sideloaded VTT tracks in the HTML5 provider
-                if(isHTML5 && isVTT && !_isSDK && canRenderNatively) {
+                if(!isFlash && isVTT && !_isSDK && canRenderNatively) {
                     continue;
                 }
 
@@ -234,22 +234,61 @@ define([
             }
             if (rss && parsers.localName(rss) === 'tt') {
                 status = utils.tryCatch(function() {
-                    track.data = dfxp(xhr.responseXML);
+                    var cues = dfxp(xhr.responseXML);
+                    var vttCues = _convertToVTTCues(cues);
+                    track.data = vttCues;
                 });
             } else {
                 status = utils.tryCatch(function() {
-                    // If no valid captions were found, an empty array is returned
-                    track.data = srt(xhr.responseText);
-                    if (track.data.length) {
-                        _addTrack(track);
-                        _this.setCaptionsList(_captionsMenu());
-                        _selectDefaultIndex();
+                    if(window.WebVTT) {
+                        _parseCues.call(_this, xhr.responseText, track);
+                    } else {
+                        // If no valid captions were found, an empty array is returned
+                        track.data = srt(xhr.responseText);
+                        if (track.data.length) {
+                            _addTrack(track);
+                            _this.setCaptionsList(_captionsMenu());
+                            _selectDefaultIndex();
+                        }
                     }
                 });
             }
             if (status instanceof utils.Error) {
                 _errorHandler(status.message + ': ' + track.file);
             }
+        }
+
+        function  _parseCues(srcContent, track) {
+            var _this = this;
+            var parser = new window.WebVTT.Parser(window, window.WebVTT.StringDecoder());
+            track.data = track.data || [];
+            parser.oncue = function(cue) {
+                track.data.push(cue);
+            };
+
+            parser.onparsingerror = function(error) {
+                console.log(error);
+            };
+
+            parser.onflush = function() {
+                console.log('flushing');
+                if (track.data.length) {
+                    _addTrack(track);
+                    _this.setCaptionsList(_captionsMenu());
+                    _selectDefaultIndex();
+                }
+            };
+
+            parser.parse(srcContent);
+            parser.flush();
+        }
+
+        function _convertToVTTCues(cues) {
+            var VTTCue = VTTCue || window.VTTCue;
+            var vttCues = _.map(cues, function (cue) {
+               return new VTTCue(cue.begin, cue.end, cue.text);
+            });
+            return vttCues;
         }
 
         function _captionsMenu() {
